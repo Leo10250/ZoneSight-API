@@ -1,5 +1,23 @@
 # Environment Setup
 
+## Conda
+From project root
+```
+conda env create -f environment.yml
+conda activate yolo
+```
+
+## PIP
+From project root
+```
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+# Manual Environment Setup
+
 ## Create & activate the Conda env (CUDA runtime included)
 `conda create -n yolo -y python=3.10 pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia`
 
