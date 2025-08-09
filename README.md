@@ -20,6 +20,9 @@
 ## Verify Ultralytics + download yolov8n once
 `python -c "from ultralytics import YOLO; YOLO('yolov8n.pt'); print('ultralytics OK')"`
 
+## Sanity Check
+`python -c "import cv2; print('cv2', cv2.__version__, '->', cv2.__file__)"`
+
 ## If `python -c "import cv2; print('cv2', cv2.__version__, '->', cv2.__file__)"` fails, try:
 ### remove conda's opencv so we have only one source
 `conda remove -y opencv`
@@ -54,7 +57,7 @@
 # Project Setup
 
 ## install FastAPI
-python -m pip install fastapi uvicorn[standard]
+`python -m pip install fastapi uvicorn[standard]`
 
 ## run the py file
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+`uvicorn main:app --host 0.0.0.0 --port 8000 --reload`
