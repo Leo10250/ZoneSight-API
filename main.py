@@ -29,9 +29,10 @@ model = YOLO("yolov8n.pt")
 
 def infer_worker():
     global latest_jpeg, latest_metrics
-    cap = cv2.VideoCapture(SOURCE, cv2.CAP_DSHOW)  # DSHOW often works best on Windows; remove on RTSP
+    # open camera/video capture device
+    cap = cv2.VideoCapture(SOURCE, cv2.CAP_DSHOW)
     if not cap.isOpened():
-        # retry loop for RTSP or detached webcams
+        # retry opening camera if camera failed to open (unless force stopped)
         while not cap.isOpened() and not stop_flag:
             time.sleep(1.0)
             cap.open(SOURCE)
@@ -61,7 +62,10 @@ def infer_worker():
         # counts per class label
         names = model.names
         cls = results.boxes.cls.tolist() if results.boxes is not None else []
-        counts = Counter(names[int(i)] for i in cls)
+        # {0: "person", 1: "bicycle", 2: "car", ...} + [0.0, 2.0, 0.0, ...] -> ["person", "car", "person", ...]
+        labels = [names[int(i)] for i in cls]
+        # ["person", "car", "person", ...] -> {"person": 2, "car": 1, ...}
+        counts = Counter(labels)
 
         # draw + encode JPEG
         annotated = results.plot()  # BGR
@@ -70,12 +74,13 @@ def infer_worker():
             continue
         jpg = buf.tobytes()
 
-        # fps
+        # measuring and smoothing the frame rate
         now = time.perf_counter()
         inst_fps = 1.0 / max(now - t_last, 1e-6)
         t_last = now
         ema_fps = inst_fps if ema_fps is None else (0.9 * ema_fps + 0.1 * inst_fps)
 
+        # thread safety
         with lock:
             latest_jpeg = jpg
             h, w = annotated.shape[:2]
