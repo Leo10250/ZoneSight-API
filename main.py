@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional
 
 import cv2
 import torch
+import asyncio
 from fastapi import FastAPI, WebSocket
 from fastapi.responses import StreamingResponse
 
@@ -136,7 +137,7 @@ async def ws_metrics(ws: WebSocket):
             with lock:
                 msg = json.dumps(latest_metrics)
             await ws.send_text(msg)
-            await ws.receive_text()  # optional: if you want pings from client; else use sleep
+            await asyncio.sleep(0.2)  # throttles so that metrics are updated every 200ms
     except Exception:
         try:
             await ws.close()
