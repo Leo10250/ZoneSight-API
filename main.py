@@ -64,23 +64,52 @@ def infer_worker():
             cap = open_capture()
             continue
 
-        # Ultralytics inference (single frame)
-        results = model(
+        # Ultralytics built-in tracking (single frame)
+        results = model.track(
             frame,
             imgsz=settings.IMG_SIZE,
             conf=settings.CONF,
+            iou=0.5,
             device=DEVICE,
             half=HALF,
+            persist=True,
             verbose=False,
+            tracker="bytetrack.yaml"
         )[0]
 
         # counts per class label
         names = model.names
-        cls = results.boxes.cls.tolist() if results.boxes is not None else []
+        boxes = results.boxes
+        
+        ids: list[int] = []
+        cls: list[int] = []
+        conf: list[float] = []
+        xyxy: list[list[float]] = []
+        
+        if boxes is not None:
+            if boxes.id is not None:
+                ids = boxes.id.int().cpu().tolist()
+            if boxes.cls is not None:
+                cls = boxes.cls.cpu().tolist()
+            if boxes.conf is not None:
+                conf  = boxes.conf.cpu().tolist()
+            if boxes.xyxy is not None:
+                xyxy  = boxes.xyxy.cpu().tolist()
         # {0: "person", 1: "bicycle", 2: "car", ...} + [0.0, 2.0, 0.0, ...] -> ["person", "car", "person", ...]
         labels = [names[int(i)] for i in cls]
         # ["person", "car", "person", ...] -> {"person": 2, "car": 1, ...}
         counts = Counter(labels)
+        
+        # Build per-detection payload for the UI
+        detection_list = [
+            {
+                "tracking_id": int(i),
+                "cls": names[int(c)],
+                "conf": float(p),
+                "xyxy": [float(v) for v in b]
+            }
+            for i, c, p, b in zip(ids, cls, conf, xyxy)
+        ]
 
         # draw + encode JPEG
         annotated = results.plot()  # BGR
@@ -106,6 +135,7 @@ def infer_worker():
                 "fps": round(ema_fps or inst_fps, 2),
                 "img_shape": [h, w],
                 "counts": dict(counts),
+                "detections": detection_list,
             }
 
     cap.release()
