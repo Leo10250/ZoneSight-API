@@ -1,6 +1,6 @@
 # ZoneSight — Real-time People & Occupancy Analytics
 
-FastAPI + YOLOv8 backend for its React dashboard. Streams annotated MJPEG video and live metrics over WebSockets; foundation for zone-based occupancy, dwell time, and event history.
+FastAPI + YOLOv8 backend for its [React dashboard](https://github.com/Leo10250/ZoneSight-UI). Streams annotated MJPEG video and live metrics over WebSockets; foundation for zone-based occupancy, dwell time, and event history.
 
 ## Stack
 - Backend: FastAPI, Ultralytics YOLOv8, WebSockets, PyTorch (CUDA), OpenCV
