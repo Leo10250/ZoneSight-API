@@ -1,4 +1,5 @@
 import os, time, threading, json
+from fastapi.middleware.cors import CORSMiddleware
 from collections import Counter
 from typing import Dict, Any, Optional
 
@@ -112,6 +113,16 @@ def infer_worker():
 
 app = FastAPI()
 
+# Add CORS
+ALLOW_ORIGINS = os.getenv("ALLOW_ORIGINS", "http://localhost:5173").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in ALLOW_ORIGINS],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.on_event("startup")
 def _startup():
@@ -160,18 +171,24 @@ def video():
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
     )
 
-
 @app.websocket("/ws")
 async def ws_metrics(ws: WebSocket):
+    # rejects unknown origins
+    origin = ws.headers.get("origin", "")
+    if origin not in ALLOW_ORIGINS:
+        await ws.close(code=1008)
+        return
+    
     await ws.accept()
     try:
         while True:
             with lock:
                 msg = json.dumps(latest_metrics)
             await ws.send_text(msg)
+            # throttles so that metrics are updated every 200ms
             await asyncio.sleep(
                 0.2
-            )  # throttles so that metrics are updated every 200ms
+            )  
     except Exception:
         try:
             await ws.close()
