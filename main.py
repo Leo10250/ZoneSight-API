@@ -9,34 +9,47 @@ from fastapi import FastAPI, WebSocket
 from fastapi.responses import StreamingResponse
 
 from ultralytics import YOLO
+from config import Settings
 
 # ---- Config ----
-SOURCE = int(os.getenv("CAM_INDEX", "1"))      # 0 = default webcam, or RTSP URL string
-IMG_SIZE = int(os.getenv("IMG_SIZE", "640"))
-CONF = float(os.getenv("CONF", "0.25"))
+settings = Settings()
 DEVICE = 0 if torch.cuda.is_available() else "cpu"
 HALF = bool(int(os.getenv("HALF", "1"))) and torch.cuda.is_available()
-JPEG_QUALITY = int(os.getenv("JPEG_QUALITY", "80"))
-STREAM_FPS = float(os.getenv("STREAM_FPS", "20"))  # target MJPEG send rate
 
 # ---- Globals updated by worker ----
 latest_jpeg: Optional[bytes] = None
-latest_metrics: Dict[str, Any] = {"fps": 0.0, "counts": {}, "ts": 0.0, "img_shape": [0, 0]}
+latest_metrics: Dict[str, Any] = {
+    "fps": 0.0,
+    "counts": {},
+    "ts": 0.0,
+    "img_shape": [0, 0],
+}
 stop_flag = False
 lock = threading.Lock()
 
 # ---- Model ----
 model = YOLO("yolov8n.pt")
 
+
+def open_capture():
+    if settings.source_is_index:
+        # For Windows webcam
+        return cv2.VideoCapture(int(settings.SOURCE), cv2.CAP_DSHOW)
+    # For RTSP/HTTP sources
+    return cv2.VideoCapture(settings.SOURCE)
+
+
 def infer_worker():
     global latest_jpeg, latest_metrics
     # open camera/video capture device
-    cap = cv2.VideoCapture(SOURCE, cv2.CAP_DSHOW)
+    cap = open_capture()
     if not cap.isOpened():
         # retry opening camera if camera failed to open (unless force stopped)
         while not cap.isOpened() and not stop_flag:
             time.sleep(1.0)
-            cap.open(SOURCE)
+            cap.open(
+                int(settings.SOURCE) if settings.source_is_index else settings.SOURCE
+            )
 
     t_last = time.perf_counter()
     ema_fps = None
@@ -47,17 +60,17 @@ def infer_worker():
             # try to recover the stream
             cap.release()
             time.sleep(0.5)
-            cap = cv2.VideoCapture(SOURCE, cv2.CAP_DSHOW)
+            cap = open_capture()
             continue
 
         # Ultralytics inference (single frame)
         results = model(
             frame,
-            imgsz=IMG_SIZE,
-            conf=CONF,
+            imgsz=settings.IMG_SIZE,
+            conf=settings.CONF,
             device=DEVICE,
             half=HALF,
-            verbose=False
+            verbose=False,
         )[0]
 
         # counts per class label
@@ -70,7 +83,9 @@ def infer_worker():
 
         # draw + encode JPEG
         annotated = results.plot()  # BGR
-        ok_jpg, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
+        ok_jpg, buf = cv2.imencode(
+            ".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), settings.JPEG_QUALITY]
+        )
         if not ok_jpg:
             continue
         jpg = buf.tobytes()
@@ -94,16 +109,29 @@ def infer_worker():
 
     cap.release()
 
+
 app = FastAPI()
+
 
 @app.on_event("startup")
 def _startup():
     th = threading.Thread(target=infer_worker, daemon=True)
     th.start()
 
+
 @app.get("/health")
 def health():
-    return {"ok": True, "device": str(DEVICE)}
+    return {
+        "ok": True,
+        "device": str(DEVICE),
+        "source": settings.SOURCE,
+        "img_size": settings.IMG_SIZE,
+        "conf": settings.CONF,
+        "streaming_fps": settings.STREAM_FPS,
+        "jpeg_quality": settings.JPEG_QUALITY,
+        "half": HALF,
+    }
+
 
 @app.get("/video")
 def video():
@@ -118,16 +146,20 @@ def video():
                 yield (
                     b"--" + boundary.encode() + b"\r\n"
                     b"Content-Type: image/jpeg\r\n"
-                    b"Content-Length: " + str(len(jpg)).encode() + b"\r\n\r\n"
-                    + jpg + b"\r\n"
+                    b"Content-Length: "
+                    + str(len(jpg)).encode()
+                    + b"\r\n\r\n"
+                    + jpg
+                    + b"\r\n"
                 )
-            time.sleep(1.0 / STREAM_FPS)
+            time.sleep(1.0 / settings.STREAM_FPS)
 
     return StreamingResponse(
         gen(),
         media_type=f"multipart/x-mixed-replace; boundary={boundary}",
         headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
     )
+
 
 @app.websocket("/ws")
 async def ws_metrics(ws: WebSocket):
@@ -137,7 +169,9 @@ async def ws_metrics(ws: WebSocket):
             with lock:
                 msg = json.dumps(latest_metrics)
             await ws.send_text(msg)
-            await asyncio.sleep(0.2)  # throttles so that metrics are updated every 200ms
+            await asyncio.sleep(
+                0.2
+            )  # throttles so that metrics are updated every 200ms
     except Exception:
         try:
             await ws.close()
