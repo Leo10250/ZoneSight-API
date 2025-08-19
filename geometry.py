@@ -1,0 +1,17 @@
+from typing import Iterable, Tuple
+
+def point_in_poly(px: float, py: float, poly: Iterable[Tuple[float, float]]) -> bool:
+    # Ray casting, inclusive on edges
+    inside = False
+    pts = list(poly)
+    n = len(pts)
+    for i in range(n):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % n]
+        # check if edge straddles horizontal ray
+        if ((y1 > py) != (y2 > py)):
+            # compute x of intersection
+            xin = (x2 - x1) * (py - y1) / (y2 - y1 + 1e-12) + x1
+            if px <= xin:  # flip condition to include boundary
+                inside = not inside
+    return inside

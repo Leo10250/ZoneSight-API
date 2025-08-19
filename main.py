@@ -1,16 +1,18 @@
 import os, time, threading, json
 from fastapi.middleware.cors import CORSMiddleware
-from collections import Counter
-from typing import Dict, Any, Optional
+from collections import Counter, defaultdict
+from typing import Dict, Any, Optional, List
 
 import cv2
 import torch
 import asyncio
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, WebSocket, HTTPException
 from fastapi.responses import StreamingResponse
 
 from ultralytics import YOLO
 from config import Settings
+from zones import Zone, load_zones, save_zones
+from geometry import point_in_poly
 
 # ---- Config ----
 settings = Settings()
@@ -31,13 +33,17 @@ lock = threading.Lock()
 # ---- Model ----
 model = YOLO("yolov8n.pt")
 
-
 def open_capture():
     if settings.source_is_index:
         # For Windows webcam
         return cv2.VideoCapture(int(settings.SOURCE), cv2.CAP_DSHOW)
     # For RTSP/HTTP sources
     return cv2.VideoCapture(settings.SOURCE)
+
+def _norm_center(x1, y1, x2, y2, w, h):
+    cx = ((x1 + x2) * 0.5) / max(w, 1)
+    cy = ((y1 + y2) * 0.5) / max(h, 1)
+    return cx, cy
 
 
 def infer_worker():
@@ -111,6 +117,24 @@ def infer_worker():
             for i, c, p, b in zip(ids, cls, conf, xyxy)
         ]
 
+        h, w = frame.shape[:2]
+        
+        for d in detection_list:
+            x1, y1, x2, y2 = d["xyxy"]
+            cx, cy = _norm_center(x1, y1, x2, y2, w, h)
+            zhit = None
+            for z in zones:
+                if point_in_poly(cx, cy, z.points):
+                    zhit = z.id
+                    break
+            d["zone"] = zhit
+            
+        occ = defaultdict(set)
+        for d in detection_list:
+            if d.get("zone") and d.get("tracking_id") is not None:
+                occ[d["zone"]].add(d["tracking_id"])
+        occupancy = {k: len(v) for k, v in occ.items()}
+
         # draw + encode JPEG
         annotated = results.plot()  # BGR
         ok_jpg, buf = cv2.imencode(
@@ -129,13 +153,14 @@ def infer_worker():
         # thread safety
         with lock:
             latest_jpeg = jpg
-            h, w = annotated.shape[:2]
+            ah, aw = annotated.shape[:2]
             latest_metrics = {
                 "ts": time.time(),
                 "fps": round(ema_fps or inst_fps, 2),
-                "img_shape": [h, w],
+                "img_shape": [ah, aw],
                 "counts": dict(counts),
                 "detections": detection_list,
+                "occupancy": occupancy,
             }
 
     cap.release()
@@ -153,9 +178,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+zones: List[Zone] = []
 
 @app.on_event("startup")
 def _startup():
+    global zones
+    zones = load_zones()
     th = threading.Thread(target=infer_worker, daemon=True)
     th.start()
 
@@ -224,3 +252,14 @@ async def ws_metrics(ws: WebSocket):
             await ws.close()
         except Exception:
             pass
+
+@app.get("/zones", response_model=list[Zone])
+def get_zones():
+    return zones
+
+@app.put("/zones", response_model=list[Zone])
+def put_zones(new_zones: list[Zone]):
+    global zones
+    zones = new_zones
+    save_zones(zones)
+    return zones
