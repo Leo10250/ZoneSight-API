@@ -17,8 +17,15 @@ from geometry import point_in_poly
 
 # ---- Config ----
 settings = Settings()
+# Lock for zones (reads/writes)
+zones_lock = threading.RLock()
 DEVICE = 0 if torch.cuda.is_available() else "cpu"
 HALF = bool(int(os.getenv("HALF", "1"))) and torch.cuda.is_available()
+TRACK_MISS_TTL = float(
+    os.getenv("TRACK_MISS_TTL", "1.5")
+)  # seconds unseen before exiting
+EVENTS_MAX = int(os.getenv("EVENTS_MAX", "200"))  # size of in-memory event feed
+OCCUPANCY_CLASSES = {s.strip() for s in os.getenv("OCCUPANCY_CLASSES", "person").split(",")}
 
 # ---- Globals updated by worker ----
 latest_jpeg: Optional[bytes] = None
@@ -34,16 +41,6 @@ lock = threading.Lock()
 # ---- Model ----
 model = YOLO("yolov8n.pt")
 
-# Lock for zones (reads/writes)
-zones_lock = threading.RLock()  # NEW
-
-# ---- Phase 3 config (env-overridable) ----
-TRACK_MISS_TTL = float(
-    os.getenv("TRACK_MISS_TTL", "1.5")
-)  # seconds unseen before exiting
-EVENTS_MAX = int(os.getenv("EVENTS_MAX", "200"))  # size of in-memory event feed
-
-
 @dataclass
 class TrackState:
     id: int
@@ -51,6 +48,7 @@ class TrackState:
     last_seen: float
     zone: str | None = None
     entered_at: float | None = None  # when we entered current zone
+    cls: str | None = None          # class label (e.g., "person")
 
 
 # Live in-memory state (owned by the worker thread)
@@ -191,6 +189,10 @@ def infer_worker():
             tid = d.get("tracking_id")
             if tid is None:
                 continue
+            # restrict events/dwell to humans only
+            if d.get("cls") not in OCCUPANCY_CLASSES:   # e.g., "person"
+                continue
+            
             seen_ids.add(tid)
 
             st = tracks.get(tid)
@@ -201,6 +203,9 @@ def infer_worker():
                 tracks[tid] = st
             else:
                 st.last_seen = now
+                
+            # (create/update st as you already do)
+            st.cls = d.get("cls") or st.cls      # NEW: remember/update class label
 
             new_zone = d.get("zone")
             prev_zone = st.zone
@@ -263,8 +268,12 @@ def infer_worker():
                     )
                 del tracks[tid]
 
-        # Stable occupancy by track state (not raw per-frame detections)
-        occ_counter = Counter(st.zone for st in tracks.values() if st.zone is not None)
+        # Stable occupancy by track state, filtered to the target class (e.g., "person")
+        occ_counter = Counter(
+            st.zone
+            for st in tracks.values()
+            if st.zone is not None and st.cls in OCCUPANCY_CLASSES
+        )
         occupancy = {k: int(v) for k, v in occ_counter.items()}
 
         # draw + encode JPEG
