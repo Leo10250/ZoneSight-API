@@ -1,7 +1,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
-    # Source can be "1" (webcam index) or RTSP/HTTP URL
+    # Source can be "0" (webcam index) or RTSP/HTTP URL
     SOURCE: str = "1"
     IMG_SIZE: int = 640
     CONF: float = 0.25

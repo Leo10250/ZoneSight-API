@@ -9,6 +9,7 @@ from services.zones_store import load_zones
 from worker.infer import run_inference
 from api.routes import video, ws, zones, events, health
 
+
 def create_app() -> FastAPI:
     settings = Settings()
     app = FastAPI(title="ZoneSight API")
@@ -40,5 +41,6 @@ def create_app() -> FastAPI:
         th.start()
 
     return app
+
 
 app = create_app()
