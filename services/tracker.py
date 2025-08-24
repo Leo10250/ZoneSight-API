@@ -4,6 +4,7 @@ from collections import Counter
 from typing import Any, Dict, Iterable, List, Tuple
 from core import state
 from core.config import Settings
+from models.track_state import TrackState
 from models.zone import Zone
 from services.geometry import point_in_poly
 
@@ -46,7 +47,7 @@ class TracksManager:
             seen.add(tid)
             st = state.tracks.get(tid)
             if st is None:
-                st = state.TrackState(id=tid, first_seen=now, last_seen=now)
+                st = TrackState(id=tid, first_seen=now, last_seen=now)
                 state.tracks[tid] = st
             else:
                 st.last_seen = now
