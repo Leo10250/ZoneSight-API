@@ -1,6 +1,9 @@
 from typing import Iterable, Tuple
 
-def point_in_poly(px: float, py: float, poly: Iterable[Tuple[float, float]]) -> bool:
+
+def point_inside_polygon(
+    px: float, py: float, poly: Iterable[Tuple[float, float]]
+) -> bool:
     # Ray casting; inclusive on edges
     inside = False
     pts = list(poly)

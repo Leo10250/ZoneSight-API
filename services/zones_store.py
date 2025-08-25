@@ -12,10 +12,10 @@ def load_zones() -> List[Zone]:
     if not text:
         return []
     try:
-        raw = json.loads(text)
-        if not isinstance(raw, list):
+        zones_list = json.loads(text)
+        if not isinstance(zones_list, list):
             return []
-        return [Zone(**z) for z in raw]
+        return [Zone(**z) for z in zones_list]
     except json.JSONDecodeError:
         return []
 

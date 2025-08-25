@@ -7,64 +7,87 @@ import torch
 from core import state
 from core.config import Settings
 from services.detector import Detector
-from services.tracker import TracksManager
+from services.tracker import Tracker
+
 
 def _open_capture(settings: Settings):
     if settings.source_is_index:
         return cv2.VideoCapture(int(settings.SOURCE), cv2.CAP_DSHOW)
     return cv2.VideoCapture(settings.SOURCE)
 
+
 def run_inference(settings: Settings):
-    device = 0 if torch.cuda.is_available() else "cpu"
-    half   = bool(settings.HALF) and torch.cuda.is_available()
-    det    = Detector(settings.YOLO_WEIGHTS, device, half, settings.IMG_SIZE, settings.CONF)
-    mgr    = TracksManager(settings)
+    compute_device = 0 if torch.cuda.is_available() else "cpu"
+    use_half_precision = bool(settings.USE_HALF_PRECISION) and torch.cuda.is_available()
+    yolo_detector = Detector(
+        settings.YOLO_WEIGHTS,
+        compute_device,
+        use_half_precision,
+        settings.IMG_SIZE,
+        settings.CONF,
+    )
+    occupancy_tracker = Tracker(settings)
 
-    cap = _open_capture(settings)
-    if not cap.isOpened():
-        while not cap.isOpened() and not state.stop_flag:
+    video_capture_source = _open_capture(settings)
+    if not video_capture_source.isOpened():
+        while not video_capture_source.isOpened() and not state.stop_flag:
             time.sleep(1.0)
-            cap.open(int(settings.SOURCE) if settings.source_is_index else settings.SOURCE)
+            video_capture_source.open(
+                int(settings.SOURCE) if settings.source_is_index else settings.SOURCE
+            )
 
-    t_last = time.perf_counter()
-    ema_fps = None
+    previous_frame_time = time.perf_counter()
+    smoothed_fps = None  # ema_fps
 
     while not state.stop_flag:
-        ok, frame = cap.read()
-        if not ok:
-            cap.release(); time.sleep(0.5); cap = _open_capture(settings); continue
-            
+        frame_read_success, frame = video_capture_source.read()
+        if not frame_read_success:
+            video_capture_source.release()
+            time.sleep(0.5)
+            video_capture_source = _open_capture(settings)
+            continue
+
         frame_np: NDArray[np.uint8] = cast(NDArray[np.uint8], frame)
-        dets, counts, annotated = det.track(frame_np)
-        h, w = frame_np.shape[:2]
+        detections, object_counts, annotated_frame = yolo_detector.track(frame_np)
+        height, width = frame_np.shape[:2]
 
         # thread-safe zone snapshot
         with state.zones_lock:
             zones_snapshot = tuple(state.zones)
 
-        occupancy = mgr.update(dets, zones_snapshot, (w, h))
+        occupancy: dict[str, int] = occupancy_tracker.process_detections(
+            detections, zones_snapshot, (width, height)
+        )
 
-        ok_jpg, buf = cv2.imencode(".jpg", annotated, [int(cv2.IMWRITE_JPEG_QUALITY), settings.JPEG_QUALITY])
-        if not ok_jpg:
+        jpeg_encode_successful, frame_jpeg = cv2.imencode(
+            ".jpg",
+            annotated_frame,
+            [int(cv2.IMWRITE_JPEG_QUALITY), settings.JPEG_QUALITY],
+        )
+        if not jpeg_encode_successful:
             continue
-        jpg = buf.tobytes()
+        frame_jpeg_bytes = frame_jpeg.tobytes()
 
-        now = time.perf_counter()
-        inst_fps = 1.0 / max(now - t_last, 1e-6)
-        t_last = now
-        ema_fps = inst_fps if ema_fps is None else (0.9 * ema_fps + 0.1 * inst_fps)
+        current_frame_time = time.perf_counter()
+        instantaneous_fps = 1.0 / max(current_frame_time - previous_frame_time, 1e-6)
+        previous_frame_time = current_frame_time
+        smoothed_fps = (
+            instantaneous_fps
+            if smoothed_fps is None
+            else (0.9 * smoothed_fps + 0.1 * instantaneous_fps)
+        )
 
         with state.frame_lock:
-            state.latest_jpeg = jpg
-            ah, aw = annotated.shape[:2]
+            state.latest_jpeg = frame_jpeg_bytes
+            annotated_height, annotated_width = annotated_frame.shape[:2]
             state.latest_metrics = {
-                "ts": time.time(),
-                "fps": round(ema_fps or inst_fps, 2),
-                "img_shape": [ah, aw],
-                "counts": counts,
-                "detections": dets,             # includes zone + dwell_s
+                "timestamp": time.time(),
+                "fps": round(smoothed_fps or instantaneous_fps, 2),
+                "img_shape": [annotated_height, annotated_width],
+                "object_counts": object_counts,
+                "detections": detections,
                 "occupancy": occupancy,
                 "recent_events": list(state.events)[:10],
             }
 
-    cap.release()
+    video_capture_source.release()

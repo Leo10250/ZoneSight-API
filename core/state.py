@@ -13,7 +13,7 @@ latest_jpeg: bytes | None = None
 latest_metrics: dict[str, Any] = {
     "fps": 0.0,
     "counts": {},
-    "ts": 0.0,
+    "timestamp": 0.0,
     "img_shape": [0, 0],
 }
 

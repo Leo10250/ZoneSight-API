@@ -4,11 +4,12 @@ from core.config import Settings
 
 router = APIRouter(tags=["health"])
 
+
 @router.get("/health")
 def health():
     s = Settings()
     device = 0 if torch.cuda.is_available() else "cpu"
-    half = bool(s.HALF) and torch.cuda.is_available()
+    half = bool(s.USE_HALF_PRECISION) and torch.cuda.is_available()
     return {
         "ok": True,
         "device": str(device),
